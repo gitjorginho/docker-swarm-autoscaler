@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # A sua aplicação que vai sofrer o autoscaling automático
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    networks:
+      - rede-autoscaling
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 128M
+      # ETIQUETAS DO ORBITER: O Orbiter lê exatamente estas labels do deploy
+      labels:
+        - "orbiter=true"
+        - "orbiter.min=2"
+        - "orbiter.max=5"
+
+  # Prometheus: Coleta as métricas de CPU do Swarm de 5 em 5 segundos
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./alert.rules:/etc/prometheus/alert.rules
+    networks:
+      - rede-autoscaling
+    deploy:
+      replicas: 1
+
+  # Alertmanager: Recebe o alerta do Prometheus e avisa o Orbiter
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    networks:
+      - rede-autoscaling
+    deploy:
+      replicas: 1
+
+  # Orbiter: O motor que escuta os alertas e roda o comando de escala no Swarm
+  orbiter:
+    image: gianarb/orbiter:v0.10.0
+    command: [ "daemon", "--background=false" ]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Dá acesso para ele gerenciar o cluster
+    ports:
+      - "8000:8000"
+    networks:
+      - rede-autoscaling
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager  # Obrigatoriamente precisa rodar no nó Manager
+
+networks:
+  rede-autoscaling:
+    driver: overlay
